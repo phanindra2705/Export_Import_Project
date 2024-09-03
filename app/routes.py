@@ -218,7 +218,7 @@ def signin():
     return render_template('signin.html')
 
 
-@app.route('/dashboard') #dashboard
+@app.route('/dashboard')
 def dashboard():
     if 'username' not in session:
         flash('Please sign in first.')
