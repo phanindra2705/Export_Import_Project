@@ -4,7 +4,7 @@ from botocore.client import BaseClient
 from flask import Flask, jsonify, request, render_template, redirect, url_for, flash, session
 import pandas as pd
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from app import (
     app,
@@ -16,13 +16,14 @@ from app import (
     snowflake_database,
     snowflake_schema
 )
-from __init__ import (app, s3_bucket_name, snowflake_user, snowflake_password, snowflake_account, snowflake_warehouse,
-                      snowflake_database, snowflake_schema)
+# from __init__ import (app, s3_bucket_name, snowflake_user, snowflake_password, snowflake_account, snowflake_warehouse,
+#                       snowflake_database, snowflake_schema)
 from models import create_users_table, get_snowflake_tables, fetch_table_data, create_import_table
 from utils import s3, upload_to_s3
 from email_utils import send_email
-# from . import app, snowflake_user, snowflake_password, snowflake_account, snowflake_warehouse, snowflake_database, snowflake_schema
-# from app import app, s3_bucket_name, snowflake_user, snowflake_password, snowflake_account, snowflake_warehouse, snowflake_database, snowflake_schema
+
+
+app.permanent_session_lifetime = timedelta(minutes=30)
 
 
 @app.route('/')
@@ -76,10 +77,6 @@ def export():
         tables = get_snowflake_tables()
         return render_template('index_export.html', tables=tables)
 
-
-
-# Assuming you have these imported and set up properly:
-# s3, s3_bucket_name, create_import_table, send_email functions
 
 @app.route('/import', methods=['GET', 'POST'])
 def import_data():
@@ -137,37 +134,48 @@ def signup():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        password_hash = generate_password_hash(password)
         gmail = request.form['gmail']
 
-        conn = snowflake.connector.connect(
-            user=snowflake_user,
-            password=snowflake_password,
-            account=snowflake_account,
-            warehouse=snowflake_warehouse,
-            database=snowflake_database,
-            schema=snowflake_schema
-        )
-        cursor = conn.cursor()
-        cursor.execute("SELECT username FROM users WHERE username = %s", (username,))
-        existing_username = cursor.fetchone()
-        if existing_username:
-            flash('Username already exists. Please choose a different username.')
+        if not gmail.endswith('@gmail.com'):
+            flash('Email must be a Gmail address.')
             return redirect(url_for('signup'))
-        cursor.execute("SELECT gmail FROM users WHERE gmail = %s", (gmail,))
-        existing_gmail = cursor.fetchone()
-        if existing_gmail:
-            flash('Email already exists. Please use a different email.')
-            return redirect(url_for('signup'))
-        cursor.execute("INSERT INTO users (username, password_hash, gmail) VALUES (%s, %s, %s)",
-                       (username, password_hash, gmail))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        flash('Signup successful! Please sign in.')
-        session['username'] = username
-        session['user_email'] = gmail
+
+        password_hash = generate_password_hash(password)
+        try:
+            # Connect to Snowflake
+            conn = snowflake.connector.connect(
+                user=snowflake_user,
+                password=snowflake_password,
+                account=snowflake_account,
+                warehouse=snowflake_warehouse,
+                database=snowflake_database,
+                schema=snowflake_schema
+            )
+            cursor = conn.cursor()
+
+            # Check for existing username
+            cursor.execute("SELECT 1 FROM users WHERE username = %s", (username,))
+            if cursor.fetchone():
+                flash('Username already exists.')
+                return redirect(url_for('signup'))
+
+            # Insert new user
+            cursor.execute("INSERT INTO users (username, password_hash, gmail) VALUES (%s, %s, %s)",
+                           (username, password_hash, gmail))
+            conn.commit()
+
+            flash('Signup successful! Please sign in.')
+            session['username'] = username
+            session['user_email'] = gmail
+
+        except Exception as e:
+            flash(f"Error during signup: {str(e)}")
+        finally:
+            cursor.close()
+            conn.close()
+
         return redirect(url_for('signin'))
+
     return render_template('signup.html')
 
 
@@ -242,6 +250,7 @@ def create_users_table_api():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
 @app.route('/import-table', methods=['POST'])
 def import_table_api():
     data = request.get_json()
@@ -259,6 +268,7 @@ def import_table_api():
     else:
         return jsonify({'error': 'Failed to create table'}), 500
 
+
 @app.route('/tables', methods=['GET'])
 def get_snowflake_tables_api():
     try:
@@ -266,6 +276,7 @@ def get_snowflake_tables_api():
         return jsonify({'tables': tables}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/fetch-table-data/<table_name>', methods=['GET'])
 def fetch_table_data_api(table_name):
